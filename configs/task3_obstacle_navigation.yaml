@@ -1,0 +1,5 @@
+task: task3_obstacle_navigation
+description: "Quadrotor obstacle-aware navigation."
+asset: crazyflie
+control_mode: normalized_rotor_thrust
+status: skeleton

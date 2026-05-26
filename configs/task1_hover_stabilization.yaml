@@ -1,0 +1,5 @@
+task: task1_hover_stabilization
+description: "Quadrotor hover and attitude stabilization."
+asset: crazyflie
+control_mode: normalized_rotor_thrust
+status: skeleton

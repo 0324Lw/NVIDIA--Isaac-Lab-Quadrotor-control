@@ -1,0 +1,5 @@
+task: task2_waypoint_tracking
+description: "Quadrotor waypoint and trajectory tracking."
+asset: crazyflie
+control_mode: normalized_rotor_thrust
+status: skeleton

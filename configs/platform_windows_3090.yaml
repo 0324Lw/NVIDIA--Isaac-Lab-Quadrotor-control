@@ -1,0 +1,5 @@
+platform: windows_3090
+device: cuda:0
+default_num_envs_smoke: 64
+default_num_envs_full: 1024
+notes: "Use for RTX 3090 / 3090 Ti larger-scale quadrotor training after smoke validation."

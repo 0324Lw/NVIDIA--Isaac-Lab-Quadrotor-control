@@ -1,0 +1,5 @@
+task: task4_sim2real_robust_flight
+description: "Quadrotor sim-to-real robust flight baseline with disturbance and domain randomization."
+asset: crazyflie
+control_mode: normalized_rotor_thrust
+status: skeleton

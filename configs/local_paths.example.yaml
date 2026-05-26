@@ -1,0 +1,6 @@
+project_root: "/home/lw/quadrotor_isaaclab_rl"
+isaaclab_root: "/home/lw/IsaacLab"
+python_executable: "python"
+logs_root: "./logs"
+checkpoints_root: "./checkpoints"
+assets_root: "./assets"

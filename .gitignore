@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+*.local
+*.local.*
+
+# Logs / outputs
+logs/
+runs/
+outputs/
+wandb/
+tensorboard/
+checkpoints/
+
+# Large model / data artifacts
+*.pt
+*.pth
+*.onnx
+*.npz
+*.npy
+*.ckpt
+*.bag
+*.db3
+
+# Isaac / simulation cache
+isaac-sim/
+kit/
+cache/
+ov/
+*.usd
+*.usda
+*.usdc
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Secrets / local paths
+.env
+*.pem
+*.key
+*.token
+credentials*
+secrets*
+local_paths.yaml
+local_paths.json
