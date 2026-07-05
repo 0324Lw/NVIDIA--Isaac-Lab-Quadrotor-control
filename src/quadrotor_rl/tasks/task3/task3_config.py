@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple
 
+from quadrotor_rl.core.config.base_quadrotor_config import BaseQuadrotorConfig
+
 
 @dataclass
-class Task3Config:
+class Task3Config(BaseQuadrotorConfig):
     """Quadrotor / Crazyflie Task3: dynamic obstacle navigation world config.
 
     This file only defines configuration for the analytic world layer.
@@ -220,6 +222,7 @@ class Task3Config:
         )
 
     def validate(self) -> None:
+        self.validate_common()
         assert self.num_envs > 0, f"num_envs must be positive, got {self.num_envs}"
         assert self.device, "device must not be empty"
 

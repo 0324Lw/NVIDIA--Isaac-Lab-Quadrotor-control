@@ -1,0 +1,27 @@
+Quadrotor refactor hotfix: environment test scripts execute standalone IsaacLab test programs directly.
+
+Reason:
+- tests/task*/task*_env_test.py and world/asset test files are standalone IsaacLab test programs.
+- They intentionally create AppLauncher at module startup and run run_tests() under __main__.
+- Running them through pytest collects helper functions such as test_init_reset(env) as pytest tests and requires a nonexistent env fixture.
+- The correct invocation is python tests/... directly, not python -m pytest tests/... .
+
+Modified files:
+- scripts/ubuntu/testQuadrotorAssetControl.sh
+- scripts/ubuntu/testTask1Environment.sh
+- scripts/ubuntu/testTask2Environment.sh
+- scripts/ubuntu/testTask3Environment.sh
+- scripts/ubuntu/testTask3World.sh
+- scripts/ubuntu/testTask4Environment.sh
+- scripts/ubuntu/testTask4World.sh
+- scripts/windows/testQuadrotorAssetControl.ps1
+- scripts/windows/testTask1Environment.ps1
+- scripts/windows/testTask2Environment.ps1
+- scripts/windows/testTask3Environment.ps1
+- scripts/windows/testTask3World.ps1
+- scripts/windows/testTask4Environment.ps1
+- scripts/windows/testTask4World.ps1
+
+Notes:
+- Pure unit tests under tests/core and tests/export should still use pytest.
+- IsaacLab environment/world/asset tests should use the platform scripts or direct python tests/... execution.

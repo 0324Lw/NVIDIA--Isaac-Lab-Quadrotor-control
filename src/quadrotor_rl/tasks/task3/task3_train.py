@@ -121,6 +121,7 @@ except ImportError:
 
 from quadrotor_rl.tasks.task3.task3_config import Task3Config
 from quadrotor_rl.tasks.task3.task3_env import QuadrotorTask3Env
+from quadrotor_rl.export.policy_io import save_policy_io
 
 
 # ======================================================================
@@ -581,6 +582,16 @@ def save_all_checkpoints(
         env_steps=env_steps,
         curriculum_label=curriculum_label,
         extra=extra,
+    )
+    save_policy_io(
+        save_dir=save_dir,
+        task_name="quadrotor_task3_dynamic_obstacle_navigation",
+        env_cfg=env_cfg,
+        base_env=base_env,
+        env=env,
+        args=args,
+        env_steps=env_steps,
+        extra={"curriculum_label": curriculum_label, **(extra or {})},
     )
 
 

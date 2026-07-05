@@ -121,6 +121,7 @@ except ImportError:
 
 from quadrotor_rl.tasks.task4.task4_config import Task4Config
 from quadrotor_rl.tasks.task4.task4_env import QuadrotorTask4Env
+from quadrotor_rl.export.policy_io import save_policy_io
 
 
 # ======================================================================
@@ -552,6 +553,16 @@ def save_all_checkpoints(
         path=save_dir,
         agent=agent,
         models=models,
+        env_cfg=env_cfg,
+        base_env=base_env,
+        env=env,
+        args=args,
+        env_steps=env_steps,
+        extra=extra,
+    )
+    save_policy_io(
+        save_dir=save_dir,
+        task_name="quadrotor_task4_vision_gate_racing",
         env_cfg=env_cfg,
         base_env=base_env,
         env=env,

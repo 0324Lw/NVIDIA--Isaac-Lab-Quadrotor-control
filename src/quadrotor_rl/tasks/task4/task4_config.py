@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple
 
+from quadrotor_rl.core.config.base_quadrotor_config import BaseQuadrotorConfig
+
 
 @dataclass
-class Task4Config:
+class Task4Config(BaseQuadrotorConfig):
     """Quadrotor / Crazyflie Task4: vision-based narrow-gate racing.
 
     This config migrates the old PyBullet visual racing world to an Isaac Lab
@@ -246,6 +248,7 @@ class Task4Config:
         )
 
     def validate(self) -> None:
+        self.validate_common()
         assert self.num_envs > 0, f"num_envs must be positive, got {self.num_envs}"
         assert self.device, "device must not be empty"
 

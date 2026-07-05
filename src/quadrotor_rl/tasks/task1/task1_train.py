@@ -103,6 +103,7 @@ except ImportError:
 
 from quadrotor_rl.tasks.task1.task1_config import Task1Config
 from quadrotor_rl.tasks.task1.task1_env import QuadrotorTask1Env
+from quadrotor_rl.export.policy_io import save_policy_io
 
 
 # ======================================================================
@@ -482,6 +483,16 @@ def save_all_checkpoints(
         path=save_dir,
         agent=agent,
         models=models,
+        env_cfg=env_cfg,
+        base_env=base_env,
+        env=env,
+        args=args,
+        env_steps=env_steps,
+        extra=extra,
+    )
+    save_policy_io(
+        save_dir=save_dir,
+        task_name="quadrotor_task1_hover_stabilization",
         env_cfg=env_cfg,
         base_env=base_env,
         env=env,

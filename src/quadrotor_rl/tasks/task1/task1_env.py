@@ -9,11 +9,28 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 
+from quadrotor_rl.core.env.asset_state import estimate_articulation_mass
+from quadrotor_rl.core.env.base_quadrotor_env import QuadrotorBaseEnvMixin
+from quadrotor_rl.core.env.reset_manager import write_root_pose_to_sim
+from quadrotor_rl.core.math.quat_math import (
+    euler_to_quat_wxyz,
+    quat_rotate,
+    quat_rotate_inverse,
+    quat_to_euler_wxyz,
+    wrap_to_pi,
+)
+from quadrotor_rl.core.physics.action_semantics import (
+    QuadrotorActionSemantics,
+    reset_quadrotor_action_buffers,
+    sanitize_quadrotor_actions,
+)
+from quadrotor_rl.core.physics.rotor_model import QuadrotorRotorLimits, compute_quadrotor_wrench
+
 from quadrotor_rl.tasks.task1.task1_config import Task1Config
 from quadrotor_rl.tasks.task1.task1_scene import make_quadrotor_task1_scene_cfg, get_quadrotor_task1_asset_source
 
 
-class QuadrotorTask1Env(gym.Env):
+class QuadrotorTask1Env(QuadrotorBaseEnvMixin, gym.Env):
     """Quadrotor / Crazyflie Task1: hover and attitude stabilization.
 
     Action:
@@ -147,6 +164,19 @@ class QuadrotorTask1Env(gym.Env):
         self.prev_filtered_actions = torch.zeros_like(self.raw_actions)
         self.motor_multipliers = torch.ones_like(self.raw_actions)
 
+        self.action_semantics = QuadrotorActionSemantics(
+            action_scale=float(cfg.action_scale),
+            action_ema_alpha=float(cfg.action_ema_alpha),
+            action_deadzone=float(getattr(cfg, "action_deadzone", 0.0)),
+        )
+        self.rotor_limits = QuadrotorRotorLimits(
+            min_motor_multiplier=float(cfg.min_motor_multiplier),
+            max_motor_multiplier=float(cfg.max_motor_multiplier),
+            max_total_thrust_factor=float(cfg.max_total_thrust_factor),
+            max_body_moment_xy=float(cfg.max_body_moment_xy),
+            max_body_moment_z=float(cfg.max_body_moment_z),
+        )
+
         self.last_force_w = torch.zeros(
             (self.num_envs, 3),
             dtype=torch.float32,
@@ -229,10 +259,13 @@ class QuadrotorTask1Env(gym.Env):
         self.episode_return[env_ids] = 0.0
         self.success_counter[env_ids] = 0
 
-        self.raw_actions[env_ids] = 0.0
-        self.filtered_actions[env_ids] = 0.0
-        self.prev_filtered_actions[env_ids] = 0.0
-        self.motor_multipliers[env_ids] = 1.0
+        reset_quadrotor_action_buffers(
+            self.raw_actions,
+            self.filtered_actions,
+            self.prev_filtered_actions,
+            self.motor_multipliers,
+            env_ids,
+        )
         self.last_force_w[env_ids] = 0.0
         self.last_torque_w[env_ids] = 0.0
         self.last_torque_b[env_ids] = 0.0
@@ -267,16 +300,30 @@ class QuadrotorTask1Env(gym.Env):
                 f"expected action shape {(self.num_envs, self.num_actions)}, got {tuple(actions.shape)}"
             )
 
-        actions = torch.nan_to_num(actions, nan=0.0, posinf=1.0, neginf=-1.0)
-        actions = torch.clamp(actions, -1.0, 1.0)
-
-        self.raw_actions = actions.clone()
+        # Task1 historically stored ``filtered_actions`` in raw action space.
+        # Keep that public buffer unchanged because observation and action
+        # regularization terms read it directly. Convert to motor-delta space
+        # only when producing the physical wrench.
+        self.raw_actions = sanitize_quadrotor_actions(
+            actions,
+            min_action=self.action_semantics.min_action,
+            max_action=self.action_semantics.max_action,
+        )
+        if self.action_semantics.action_deadzone > 0.0:
+            active_actions = torch.where(
+                torch.abs(self.raw_actions) < float(self.action_semantics.action_deadzone),
+                torch.zeros_like(self.raw_actions),
+                self.raw_actions,
+            )
+        else:
+            active_actions = self.raw_actions
         self.prev_filtered_actions = self.filtered_actions.clone()
-
         alpha = float(self.cfg.action_ema_alpha)
-        self.filtered_actions = alpha * actions + (1.0 - alpha) * self.filtered_actions
+        self.filtered_actions = alpha * active_actions + (1.0 - alpha) * self.filtered_actions
+        self.filtered_actions = torch.nan_to_num(self.filtered_actions, nan=0.0, posinf=1.0, neginf=-1.0)
 
-        force_w, torque_w, torque_b, motor_mult = self._actions_to_wrench(self.filtered_actions)
+        filtered_motor_delta = float(self.cfg.action_scale) * self.filtered_actions
+        force_w, torque_w, torque_b, motor_mult = self._actions_to_wrench(filtered_motor_delta)
 
         self.motor_multipliers = motor_mult.clone()
         self.last_force_w = force_w.clone()
@@ -571,52 +618,17 @@ class QuadrotorTask1Env(gym.Env):
     # Control
     # ------------------------------------------------------------------
     def _actions_to_wrench(self, filtered_actions: torch.Tensor):
-        motor_mult = 1.0 + float(self.cfg.action_scale) * filtered_actions
-        motor_mult = torch.clamp(
-            motor_mult,
-            float(self.cfg.min_motor_multiplier),
-            float(self.cfg.max_motor_multiplier),
+        return compute_quadrotor_wrench(
+            filtered_actions=filtered_actions,
+            hover_thrust_per_rotor=self.hover_thrust_per_rotor,
+            hover_thrust=self.hover_thrust,
+            rotor_xy=self.rotor_xy,
+            rotor_yaw_signs=self.rotor_yaw_signs,
+            yaw_torque_per_newton=float(self.cfg.yaw_torque_per_newton),
+            limits=self.rotor_limits,
+            quat_wxyz=self._root_quat_wxyz(),
+            quat_rotate_fn=self._quat_rotate,
         )
-
-        rotor_forces = self.hover_thrust_per_rotor.view(-1, 1) * motor_mult
-        total_thrust = rotor_forces.sum(dim=-1)
-
-        max_total = self.hover_thrust * float(self.cfg.max_total_thrust_factor)
-        # torch.clamp does not allow min=Number and max=Tensor together.
-        # Use elementwise maximum/minimum because hover_thrust is per-env.
-        total_thrust = torch.maximum(total_thrust, torch.zeros_like(total_thrust))
-        total_thrust = torch.minimum(total_thrust, max_total)
-
-        x = self.rotor_xy[:, 0].view(1, 4)
-        y = self.rotor_xy[:, 1].view(1, 4)
-
-        torque_x = torch.sum(y * rotor_forces, dim=-1)
-        torque_y = -torch.sum(x * rotor_forces, dim=-1)
-        torque_z = float(self.cfg.yaw_torque_per_newton) * torch.sum(
-            self.rotor_yaw_signs.view(1, 4) * rotor_forces,
-            dim=-1,
-        )
-
-        torque_b = torch.stack([torque_x, torque_y, torque_z], dim=-1)
-        torque_b[:, 0:2] = torch.clamp(
-            torque_b[:, 0:2],
-            -float(self.cfg.max_body_moment_xy),
-            float(self.cfg.max_body_moment_xy),
-        )
-        torque_b[:, 2] = torch.clamp(
-            torque_b[:, 2],
-            -float(self.cfg.max_body_moment_z),
-            float(self.cfg.max_body_moment_z),
-        )
-
-        force_b = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
-        force_b[:, 2] = total_thrust
-
-        quat = self._root_quat_wxyz()
-        force_w = self._quat_rotate(quat, force_b)
-        torque_w = self._quat_rotate(quat, torque_b)
-
-        return force_w, torque_w, torque_b, motor_mult
 
     def _apply_external_wrench(self, env_ids: torch.Tensor, force_w: torch.Tensor, torque_w: torch.Tensor) -> None:
         env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device).flatten()
@@ -709,26 +721,11 @@ class QuadrotorTask1Env(gym.Env):
     # State helpers
     # ------------------------------------------------------------------
     def _estimate_mass(self) -> torch.Tensor:
-        try:
-            masses = self.drone.root_physx_view.get_masses()
-            masses = torch.as_tensor(masses, dtype=torch.float32, device=self.device)
-
-            if masses.ndim == 2:
-                total = masses.sum(dim=-1)
-            else:
-                total = masses.reshape(self.num_envs, -1).sum(dim=-1)
-
-            if torch.isfinite(total).all().item() and total.mean().item() > 1.0e-5:
-                return total
-
-        except Exception:
-            pass
-
-        return torch.full(
-            (self.num_envs,),
-            float(self.cfg.nominal_mass),
-            dtype=torch.float32,
+        return estimate_articulation_mass(
+            drone=self.drone,
+            num_envs=self.num_envs,
             device=self.device,
+            fallback_mass=float(self.cfg.nominal_mass),
         )
 
     def _write_root_pose_to_sim(
@@ -740,16 +737,16 @@ class QuadrotorTask1Env(gym.Env):
         yaw: torch.Tensor,
         zero_vel: bool = True,
     ) -> None:
-        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device).flatten()
-
-        root_state = self.drone.data.default_root_state[env_ids].clone()
-        root_state[:, :3] = self.env_origins[env_ids] + pos_local
-        root_state[:, 3:7] = self._euler_to_quat_wxyz(roll, pitch, yaw)
-
-        if zero_vel:
-            root_state[:, 7:13] = 0.0
-
-        self.drone.write_root_state_to_sim(root_state, env_ids=env_ids)
+        write_root_pose_to_sim(
+            drone=self.drone,
+            env_origins=self.env_origins,
+            env_ids=env_ids,
+            pos_local=pos_local,
+            roll=roll,
+            pitch=pitch,
+            yaw=yaw,
+            zero_vel=zero_vel,
+        )
 
     def _root_pos_w(self) -> torch.Tensor:
         return self.drone.data.root_pos_w.clone()
@@ -778,60 +775,23 @@ class QuadrotorTask1Env(gym.Env):
 
     @staticmethod
     def _wrap_to_pi(x: torch.Tensor) -> torch.Tensor:
-        return torch.atan2(torch.sin(x), torch.cos(x))
+        return wrap_to_pi(x)
 
     @staticmethod
     def _euler_to_quat_wxyz(roll: torch.Tensor, pitch: torch.Tensor, yaw: torch.Tensor) -> torch.Tensor:
-        cr = torch.cos(0.5 * roll)
-        sr = torch.sin(0.5 * roll)
-        cp = torch.cos(0.5 * pitch)
-        sp = torch.sin(0.5 * pitch)
-        cy = torch.cos(0.5 * yaw)
-        sy = torch.sin(0.5 * yaw)
-
-        q = torch.zeros((roll.shape[0], 4), dtype=torch.float32, device=roll.device)
-        q[:, 0] = cr * cp * cy + sr * sp * sy
-        q[:, 1] = sr * cp * cy - cr * sp * sy
-        q[:, 2] = cr * sp * cy + sr * cp * sy
-        q[:, 3] = cr * cp * sy - sr * sp * cy
-        return q
+        return euler_to_quat_wxyz(roll, pitch, yaw)
 
     @staticmethod
     def _quat_to_euler_wxyz(q: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        w = q[:, 0]
-        x = q[:, 1]
-        y = q[:, 2]
-        z = q[:, 3]
-
-        sinr_cosp = 2.0 * (w * x + y * z)
-        cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-        roll = torch.atan2(sinr_cosp, cosr_cosp)
-
-        sinp = 2.0 * (w * y - z * x)
-        pitch = torch.where(
-            torch.abs(sinp) >= 1.0,
-            torch.sign(sinp) * (torch.pi / 2.0),
-            torch.asin(sinp),
-        )
-
-        siny_cosp = 2.0 * (w * z + x * y)
-        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-        yaw = torch.atan2(siny_cosp, cosy_cosp)
-
-        return roll, pitch, yaw
+        return quat_to_euler_wxyz(q)
 
     @staticmethod
     def _quat_rotate(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        q_w = q[:, 0:1]
-        q_vec = q[:, 1:4]
-        t = 2.0 * torch.cross(q_vec, v, dim=-1)
-        return v + q_w * t + torch.cross(q_vec, t, dim=-1)
+        return quat_rotate(q, v)
 
     @staticmethod
     def _quat_rotate_inverse(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        q_inv = q.clone()
-        q_inv[:, 1:4] *= -1.0
-        return QuadrotorTask1Env._quat_rotate(q_inv, v)
+        return quat_rotate_inverse(q, v)
 
     # ------------------------------------------------------------------
     # Debug

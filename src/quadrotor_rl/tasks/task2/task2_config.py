@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple
 
+from quadrotor_rl.core.config.base_quadrotor_config import BaseQuadrotorConfig
+
 
 @dataclass
-class Task2Config:
+class Task2Config(BaseQuadrotorConfig):
     """Quadrotor / Crazyflie Task2: 3D trajectory tracking.
 
     Task logic:
@@ -196,6 +198,7 @@ class Task2Config:
         )
 
     def validate(self) -> None:
+        self.validate_common()
         assert self.num_envs > 0, f"num_envs must be positive, got {self.num_envs}"
         assert self.device, "device must not be empty"
 
